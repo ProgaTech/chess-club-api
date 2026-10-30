@@ -81,23 +81,28 @@ describe('swiss', () => {
     expect(pairs.map(label)).toEqual(['Cid–Bea', 'Ada–Dee'])
   })
 
-  test('a player on 0 who won a game plays a random player on 1', () => {
-    const ada = player('Ada', 1)
-    ada.opponents = ['vlad']
+  test('extra game wins stay inside the score group', () => {
     const vlad = player('Vlad', 0)
-    vlad.gameWins = 1
-    vlad.opponents = ['ada']
+    vlad.gameWins = 4
+    const pairs = swissPairs([player('Ada', 1), player('Bea', 1), vlad, player('Dee', 0)], keepOrder)
+    expect(pairs.map(label)).toEqual(['Ada–Bea', 'Dee–Vlad'])
+  })
+
+  test('an odd group plays down against a random player with the most game wins', () => {
+    const bea = player('Bea', 1)
+    bea.gameWins = 1
+    const cid = player('Cid', 1)
+    cid.gameWins = 3
+    const dee = player('Dee', 1)
+    dee.gameWins = 3
     let cursor = 0
-    const rolls = [0]
-    const pairs = swissPairs(
-      [ada, player('Bea', 1), player('Cid', 1), vlad, player('Dee', 0)],
-      () => rolls[cursor++] ?? 0.999999999999,
-    )
-    expect(pairs.map(label)).toEqual(['Bea–Vlad', 'Ada–Cid', 'Dee'])
-    const vladPair = pairs.find((pair) => pair.white === 'Vlad' || pair.black === 'Vlad')
-    expect(vladPair?.kind).toBe('up')
-    expect(vladPair?.reason).toContain('1 game win')
-    expect(vladPair?.reason).toContain('random player on 1 point')
+    const pairs = swissPairs([player('Ada', 2), bea, cid, dee], () => {
+      cursor += 1
+      return cursor === 1 ? 0 : 0.999999999999
+    })
+    expect(pairs.map(label)).toEqual(['Ada–Cid', 'Bea–Dee'])
+    expect(pairs[0]?.kind).toBe('down')
+    expect(pairs[0]?.reason).toContain('most game wins')
   })
 
   test('flips colors when a score group has to rematch', () => {

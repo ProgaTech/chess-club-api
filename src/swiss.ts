@@ -34,15 +34,15 @@ interface IPointBand {
 
 const PAIRING_ATTEMPTS = 200
 
-// Pairs by score. A new opponent matters more than staying in the exact score group: each draw swaps
-// partners out of a rematch with the closest scores, then reshuffles until nobody meets an old opponent.
-// When a rematch is unavoidable, one of the score draws with the fewest rematches is picked at random.
+// Pairs the highest score group first. Each group is shuffled and paired inside itself. One player left
+// over in an odd group plays a random player with the most game wins in the next group down. The draw is
+// reshuffled, and one of the draws with the fewest rematches is kept.
 export function freshSwissPairs(
   players: ISwissPlayer[],
   random: () => number = Math.random,
   attempts = PAIRING_ATTEMPTS,
 ): ISwissPair[] {
-  return fewestOf(() => avoidRematches(swissPairs(players, random), players, random), random, attempts)
+  return fewestOf(() => swissPairs(players, random), random, attempts)
 }
 
 // Ignores scores entirely: random opponents, new ones first, and a random bye for a player who has not
@@ -114,70 +114,6 @@ function randomPair(player: ISwissPlayer, opponent: ISwissPlayer): ISwissPair {
   return explain(higher, lower, kind, 'Random draw: scores are ignored and new opponents come first.')
 }
 
-// A pair that repeats a match swaps partners with the pair whose scores are closest, as long as both
-// new games are fresh. Ties are drawn at random, so drawing again can give a different swap.
-function avoidRematches(pairs: ISwissPair[], players: ISwissPlayer[], random: () => number): ISwissPair[] {
-  const byName = new Map(players.map((player) => [nameKey(player.name), player]))
-  const next = [...pairs]
-
-  for (let index = 0; index < next.length; index += 1) {
-    const pair = next[index]
-    const left = pair ? byName.get(nameKey(pair.white)) : undefined
-    const right = pair?.black ? byName.get(nameKey(pair.black)) : undefined
-    if (!pair?.rematch || !left || !right) {
-      continue
-    }
-
-    let best: { cost: number; swaps: { other: number; first: ISwissPair; second: ISwissPair }[] } | null = null
-    for (let other = 0; other < next.length; other += 1) {
-      const candidate = next[other]
-      const first = candidate ? byName.get(nameKey(candidate.white)) : undefined
-      const second = candidate?.black ? byName.get(nameKey(candidate.black)) : undefined
-      if (other === index || !first || !second) {
-        continue
-      }
-      for (const [mine, theirs] of [
-        [first, second],
-        [second, first],
-      ] as const) {
-        if (hasPlayed(left, mine) || hasPlayed(right, theirs)) {
-          continue
-        }
-        const cost = Math.abs(left.points - mine.points) + Math.abs(right.points - theirs.points)
-        const swap = {
-          other,
-          first: swapPair(left, mine, right, theirs),
-          second: swapPair(right, theirs, left, mine),
-        }
-        if (!best || cost < best.cost) {
-          best = { cost, swaps: [swap] }
-        } else if (cost === best.cost) {
-          best.swaps.push(swap)
-        }
-      }
-    }
-
-    const chosen = best?.swaps[Math.floor(random() * best.swaps.length)]
-    if (chosen) {
-      next[index] = chosen.first
-      next[chosen.other] = chosen.second
-    }
-  }
-
-  return next
-}
-
-function swapPair(player: ISwissPlayer, opponent: ISwissPlayer, old: ISwissPlayer, oldOpponent: ISwissPlayer): ISwissPair {
-  const [higher, lower] = opponent.points > player.points ? [opponent, player] : [player, opponent]
-  const kind: SwissPairKind = higher.points === lower.points ? 'same' : 'down'
-  return explain(
-    higher,
-    lower,
-    kind,
-    `${player.name} already played ${old.name}, so they swap partners with ${opponent.name} and ${oldOpponent.name}, the closest scores with fresh games.`,
-  )
-}
-
 export function rematchCount(pairs: ISwissPair[]): number {
   return pairs.filter((pair) => pair.rematch).length
 }
@@ -185,82 +121,41 @@ export function rematchCount(pairs: ISwissPair[]): number {
 export function swissPairs(players: ISwissPlayer[], random: () => number = Math.random): ISwissPair[] {
   const bands = bandsByPoints(players)
   const pairs: ISwissPair[] = []
-  const used = new Set<string>()
-
-  for (let index = 1; index < bands.length; index += 1) {
-    const higher = bands[index - 1]
-    const band = bands[index]
-    if (!higher || !band || band.players.length === 0) {
-      continue
-    }
-    const floor = lowestWins(band.players)
-    const climbers = shuffle(
-      band.players.filter((player) => player.gameWins > floor),
-      random,
-    )
-    band.players = band.players.filter((player) => player.gameWins <= floor)
-    for (const climber of climbers) {
-      const opponent = pickOpponent(climber, higher.players, used, random)
-      if (!opponent) {
-        band.players.push(climber)
-        continue
-      }
-      used.add(nameKey(climber.name))
-      used.add(nameKey(opponent.name))
-      higher.players = higher.players.filter((player) => nameKey(player.name) !== nameKey(opponent.name))
-      pairs.push(explain(opponent, climber, 'up', upReason(climber, opponent, floor)))
-    }
-  }
 
   for (let index = 0; index < bands.length; index += 1) {
     const band = bands[index]
     const next = bands[index + 1]
-    if (!band) {
+    if (!band || band.players.length === 0) {
       continue
     }
-    const ranked = shuffle(
-      band.players.filter((player) => !used.has(nameKey(player.name))),
-      random,
-    )
-    const waiting: ISwissPlayer[] = []
-    const seated = new Set<string>()
-    for (const player of ranked) {
-      if (seated.has(nameKey(player.name))) {
-        continue
-      }
-      const opponent = findOpponent(player, ranked, seated)
-      if (!opponent) {
-        waiting.push(player)
-        continue
-      }
-      seated.add(nameKey(player.name))
-      seated.add(nameKey(opponent.name))
-      used.add(nameKey(player.name))
-      used.add(nameKey(opponent.name))
-      pairs.push(explain(player, opponent, 'same', sameReason(player, opponent)))
-    }
 
-    for (const player of waiting) {
-      if (used.has(nameKey(player.name)) || !next) {
-        continue
-      }
-      const opponent = pickOpponent(player, next.players, used, random)
-      if (!opponent) {
-        next.players.push(player)
-        continue
-      }
-      used.add(nameKey(player.name))
-      used.add(nameKey(opponent.name))
-      next.players = next.players.filter((item) => nameKey(item.name) !== nameKey(opponent.name))
-      pairs.push(explain(player, opponent, 'down', downReason(player, opponent)))
-    }
-
+    let field = shuffle(band.players, random)
     if (!next) {
-      const bye = takeBye(waiting.filter((player) => !used.has(nameKey(player.name))))
+      const bye = takeBye(field)
       if (bye) {
         pairs.push(explain(bye, null, 'bye', byeReason(bye)))
+        field = field.filter((player) => nameKey(player.name) !== nameKey(bye.name))
       }
     }
+
+    for (let seat = 0; seat + 1 < field.length; seat += 2) {
+      const left = field[seat]
+      const right = field[seat + 1]
+      if (left && right) {
+        pairs.push(explain(left, right, 'same', sameReason(left, right)))
+      }
+    }
+
+    const leftover = field.length % 2 === 1 ? field[field.length - 1] : undefined
+    if (!leftover || !next) {
+      continue
+    }
+    const opponent = randomHighest(next.players, random)
+    if (!opponent) {
+      continue
+    }
+    next.players = next.players.filter((player) => nameKey(player.name) !== nameKey(opponent.name))
+    pairs.push(explain(leftover, opponent, 'down', downReason(leftover, opponent)))
   }
 
   return pairs
@@ -280,24 +175,18 @@ function bandsByPoints(players: ISwissPlayer[]): IPointBand[] {
   return bands
 }
 
-function lowestWins(players: ISwissPlayer[]): number {
-  return players.reduce((lowest, player) => Math.min(lowest, player.gameWins), players[0]?.gameWins ?? 0)
-}
-
-function pickOpponent(
-  player: ISwissPlayer,
-  pool: ISwissPlayer[],
-  used: Set<string>,
-  random: () => number,
-): ISwissPlayer | null {
-  const free = pool.filter((candidate) => !used.has(nameKey(candidate.name)))
-  const fresh = free.filter((candidate) => !hasPlayed(player, candidate))
-  const choices = fresh.length > 0 ? fresh : free
-  if (choices.length === 0) {
+function randomHighest(players: ISwissPlayer[], random: () => number): ISwissPlayer | null {
+  let top = 0
+  for (const player of players) {
+    if (player.gameWins > top) {
+      top = player.gameWins
+    }
+  }
+  const pool = players.filter((player) => player.gameWins === top)
+  if (pool.length === 0) {
     return null
   }
-  const index = Math.floor(random() * choices.length)
-  return choices[index] ?? null
+  return pool[Math.floor(random() * pool.length)] ?? null
 }
 
 function explain(left: ISwissPlayer, right: ISwissPlayer | null, kind: SwissPairKind, reason: string): ISwissPair {
@@ -329,17 +218,13 @@ function toSide(player: ISwissPlayer): ISwissSide {
   return { name: player.name, points: player.points, gameWins: player.gameWins }
 }
 
-function upReason(climber: ISwissPlayer, opponent: ISwissPlayer, floor: number): string {
-  return `${climber.name} is on ${pointsText(climber.points)} with ${winsText(climber.gameWins)}. Others on that score have ${winsText(floor)}, so ${climber.name} plays a random player on ${pointsText(opponent.points)}.`
-}
-
 function sameReason(left: ISwissPlayer, right: ISwissPlayer): string {
-  const rematch = hasPlayed(left, right) ? ' They already played, and nobody else on this score was free.' : ''
+  const rematch = hasPlayed(left, right) ? ' They already played.' : ''
   return `Both are on ${pointsText(left.points)}, with ${winsText(left.gameWins)} and ${winsText(right.gameWins)}. Same score is drawn at random.${rematch}`
 }
 
 function downReason(left: ISwissPlayer, right: ISwissPlayer): string {
-  return `${left.name} was left over on ${pointsText(left.points)}. That score had an odd count, so they play a random player on ${pointsText(right.points)}.`
+  return `${left.name} was left over on ${pointsText(left.points)}. That score had an odd count, so they play ${right.name}, drawn at random from the players on ${pointsText(right.points)} with the most game wins.`
 }
 
 function byeReason(player: ISwissPlayer): string {
@@ -397,11 +282,6 @@ function takeBye(ranked: ISwissPlayer[]): ISwissPlayer | null {
     }
   }
   return ranked[ranked.length - 1] ?? null
-}
-
-function findOpponent(player: ISwissPlayer, rest: ISwissPlayer[], used: Set<string>): ISwissPlayer | null {
-  const available = rest.filter((candidate) => nameKey(candidate.name) !== nameKey(player.name) && !used.has(nameKey(candidate.name)))
-  return available.find((candidate) => !hasPlayed(player, candidate)) ?? available[0] ?? null
 }
 
 function chooseWhite(left: ISwissPlayer, right: ISwissPlayer): ISwissPlayer {
