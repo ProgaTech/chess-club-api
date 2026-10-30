@@ -2,9 +2,11 @@ import { readBoard } from './board'
 import { readClubNames } from './club-names'
 import type { IClubNames } from './club-names'
 import { listDraws, saveNextRound } from './draws'
-import type { IDrawResult, IPairing, ISavedDraw, SaveDrawResult } from './draws'
+import type { IDrawResult, IPairing, ISavedDraw } from './draws'
 import type { IBoardDraw, IBoardPair, IStanding } from './match-score'
-import { swissPairs } from './swiss'
+import { revealPairs } from './reveal'
+import type { IRevealPair } from './reveal'
+import { freshSwissPairs, randomPairs } from './swiss'
 import type { ISwissPair, ISwissPlayer } from './swiss'
 
 const ROUND_LIMIT = 4
@@ -50,7 +52,7 @@ export type PreviewRoundResult =
   | { ok: false; status: 400 | 409; error: string }
 
 export async function previewNextRound(round: number): Promise<PreviewRoundResult> {
-  const planned = await planNextRound(round, true)
+  const planned = await planNextRound(round, true, 'score')
   if (!planned.ok) {
     return planned
   }
@@ -62,21 +64,88 @@ export async function previewNextRound(round: number): Promise<PreviewRoundResul
   }
 }
 
-export async function generateNextRound(round: number): Promise<SaveDrawResult> {
-  const planned = await planNextRound(round, false)
+export interface IKeptPair {
+  white: string
+  black: string | null
+}
+
+// 'score' pairs by points (the Swiss draw); 'random' ignores points.
+export type DrawMode = 'score' | 'random'
+
+export type GenerateRoundResult =
+  | { ok: true; draw: ISavedDraw; pairs: IRevealPair[] }
+  | { ok: true; confirm: IPreviewPair[] }
+  | { ok: false; status: 400 | 409; error: string }
+
+// A score draw without rematches is saved straight away. A draw that repeats an old match, and every random
+// draw, is returned for the organizer to confirm instead. Kept pairs are the ones the organizer confirmed;
+// they must seat every player exactly once. A saved draw comes back with the points it was drawn from.
+export async function generateNextRound(round: number, kept: IKeptPair[] | null, mode: DrawMode): Promise<GenerateRoundResult> {
+  const planned = await planNextRound(round, false, mode)
   if (!planned.ok) {
     return planned
   }
 
-  return saveNextRound({
+  let next = planned.plan.next
+  if (kept) {
+    const checked = checkKeptPairs(kept, planned.plan.explained)
+    if (!checked) {
+      return { ok: false, status: 400, error: 'Those pairs do not seat every player exactly once.' }
+    }
+    next = { pairs: checked }
+  } else if (mode === 'random' || planned.plan.explained.some((pair) => pair.rematch)) {
+    return { ok: true, confirm: planned.plan.explained.map(toPreviewPair) }
+  }
+
+  const saved = await saveNextRound({
     expectedCount: planned.plan.expectedCount,
     previousId: planned.plan.previousId,
     previous: planned.plan.closed,
-    next: planned.plan.next,
+    next,
   })
+  if (!saved.ok) {
+    return saved
+  }
+  return { ok: true, draw: saved.draw, pairs: revealPairs(next.pairs, planned.plan.explained) }
 }
 
-async function planNextRound(round: number, ignoreDate: boolean): Promise<RoundPlanResult> {
+function checkKeptPairs(kept: IKeptPair[], planned: ISwissPair[]): IPairing[] | null {
+  const names = new Map<string, string>()
+  for (const pair of planned) {
+    names.set(nameKey(pair.white), pair.white)
+    if (pair.black) {
+      names.set(nameKey(pair.black), pair.black)
+    }
+  }
+
+  const seated = new Set<string>()
+  const pairs: IPairing[] = []
+  let byes = 0
+  for (const pair of kept) {
+    const white = names.get(nameKey(pair.white))
+    const black = pair.black === null ? null : names.get(nameKey(pair.black))
+    if (!white || black === undefined || seated.has(nameKey(white)) || (black && seated.has(nameKey(black)))) {
+      return null
+    }
+    if (black && nameKey(black) === nameKey(white)) {
+      return null
+    }
+    seated.add(nameKey(white))
+    if (black) {
+      seated.add(nameKey(black))
+    } else {
+      byes += 1
+    }
+    pairs.push({ white, black, games: [] })
+  }
+
+  if (seated.size !== names.size || byes !== names.size % 2) {
+    return null
+  }
+  return pairs
+}
+
+async function planNextRound(round: number, ignoreDate: boolean, mode: DrawMode): Promise<RoundPlanResult> {
   if (!Number.isInteger(round) || round < 2 || round > ROUND_LIMIT) {
     return { ok: false, status: 400, error: 'That round cannot be drawn.' }
   }
@@ -105,7 +174,7 @@ async function planNextRound(round: number, ignoreDate: boolean): Promise<RoundP
   }
 
   const players = swissPlayers(board.standings, [...board.draws].reverse())
-  const explained = swissPairs(players)
+  const explained = mode === 'random' ? randomPairs(players) : freshSwissPairs(players)
   const next: IDrawResult = {
     pairs: explained.map(toStoredPair),
   }

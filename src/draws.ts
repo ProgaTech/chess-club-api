@@ -3,6 +3,8 @@ import { chessGameUrl } from './chess-game'
 import { readClubNames } from './club-names'
 import { db } from './db/client'
 import { draws } from './db/schema'
+import { memberName } from './roles'
+import type { IActor } from './roles'
 
 export interface IPairing {
   white: string
@@ -64,7 +66,9 @@ interface IGameRequest {
   url: string
 }
 
-export async function addDrawGame(drawId: number, body: unknown): Promise<SaveDrawResult> {
+export type AddGameResult = SaveDrawResult | { ok: false; status: 403; error: string }
+
+export async function addDrawGame(drawId: number, body: unknown, actor: IActor): Promise<AddGameResult> {
   const request = parseGameRequest(body)
   if (request === 'invalid-url') {
     return { ok: false, status: 400, error: 'Paste a Chess.com game link.' }
@@ -87,6 +91,15 @@ export async function addDrawGame(drawId: number, body: unknown): Promise<SaveDr
   const pair = result.pairs.find((item) => club.same(item.white, request.white) && club.same(item.black, request.black))
   if (!pair?.black) {
     return { ok: false, status: 400, error: 'That match is not in this draw.' }
+  }
+  if (actor.role !== 'organizer') {
+    const me = await memberName(actor.clerkUserId)
+    if (!me) {
+      return { ok: false, status: 403, error: 'Only club members can add games.' }
+    }
+    if (!club.same(me, pair.white) && !club.same(me, pair.black)) {
+      return { ok: false, status: 403, error: 'Only players in this match can add its games.' }
+    }
   }
   if (pair.skipped) {
     return { ok: false, status: 409, error: 'That round is closed.' }

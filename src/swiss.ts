@@ -32,6 +32,156 @@ interface IPointBand {
   players: ISwissPlayer[]
 }
 
+const PAIRING_ATTEMPTS = 200
+
+// Pairs by score. A new opponent matters more than staying in the exact score group: each draw swaps
+// partners out of a rematch with the closest scores, then reshuffles until nobody meets an old opponent.
+// When a rematch is unavoidable, one of the score draws with the fewest rematches is picked at random.
+export function freshSwissPairs(
+  players: ISwissPlayer[],
+  random: () => number = Math.random,
+  attempts = PAIRING_ATTEMPTS,
+): ISwissPair[] {
+  return fewestOf(() => avoidRematches(swissPairs(players, random), players, random), random, attempts)
+}
+
+// Ignores scores entirely: random opponents, new ones first, and a random bye for a player who has not
+// had one. Picks one of the random draws with the fewest rematches.
+export function randomPairs(
+  players: ISwissPlayer[],
+  random: () => number = Math.random,
+  attempts = PAIRING_ATTEMPTS,
+): ISwissPair[] {
+  return fewestOf(() => randomDraw(players, random), random, attempts)
+}
+
+function fewestOf(draw: () => ISwissPair[], random: () => number, attempts: number): ISwissPair[] {
+  let fewest = Number.POSITIVE_INFINITY
+  let options: ISwissPair[][] = []
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const pairs = draw()
+    const count = rematchCount(pairs)
+    if (count === 0) {
+      return pairs
+    }
+    if (count < fewest) {
+      fewest = count
+      options = []
+    }
+    if (count === fewest) {
+      options.push(pairs)
+    }
+  }
+  return options[Math.floor(random() * options.length)] ?? draw()
+}
+
+function randomDraw(players: ISwissPlayer[], random: () => number): ISwissPair[] {
+  let order = shuffle(players, random)
+  let bye: ISwissPair | null = null
+  if (order.length % 2 === 1) {
+    const due = order.filter((player) => !player.hadBye)
+    const pool = due.length > 0 ? due : order
+    const sitter = pool[Math.floor(random() * pool.length)]
+    if (sitter) {
+      order = order.filter((player) => player !== sitter)
+      bye = explain(sitter, null, 'bye', `${sitter.name} sits out, drawn at random from players without a bye.`)
+    }
+  }
+
+  const seated = new Set<string>()
+  const pairs: ISwissPair[] = []
+  for (const player of order) {
+    if (seated.has(nameKey(player.name))) {
+      continue
+    }
+    const open = order.filter((other) => other !== player && !seated.has(nameKey(other.name)))
+    const fresh = open.filter((other) => !hasPlayed(player, other))
+    const pool = fresh.length > 0 ? fresh : open
+    const opponent = pool[Math.floor(random() * pool.length)]
+    if (!opponent) {
+      continue
+    }
+    seated.add(nameKey(player.name))
+    seated.add(nameKey(opponent.name))
+    pairs.push(randomPair(player, opponent))
+  }
+  return bye ? [...pairs, bye] : pairs
+}
+
+function randomPair(player: ISwissPlayer, opponent: ISwissPlayer): ISwissPair {
+  const [higher, lower] = opponent.points > player.points ? [opponent, player] : [player, opponent]
+  const kind: SwissPairKind = higher.points === lower.points ? 'same' : 'down'
+  return explain(higher, lower, kind, 'Random draw: scores are ignored and new opponents come first.')
+}
+
+// A pair that repeats a match swaps partners with the pair whose scores are closest, as long as both
+// new games are fresh. Ties are drawn at random, so drawing again can give a different swap.
+function avoidRematches(pairs: ISwissPair[], players: ISwissPlayer[], random: () => number): ISwissPair[] {
+  const byName = new Map(players.map((player) => [nameKey(player.name), player]))
+  const next = [...pairs]
+
+  for (let index = 0; index < next.length; index += 1) {
+    const pair = next[index]
+    const left = pair ? byName.get(nameKey(pair.white)) : undefined
+    const right = pair?.black ? byName.get(nameKey(pair.black)) : undefined
+    if (!pair?.rematch || !left || !right) {
+      continue
+    }
+
+    let best: { cost: number; swaps: { other: number; first: ISwissPair; second: ISwissPair }[] } | null = null
+    for (let other = 0; other < next.length; other += 1) {
+      const candidate = next[other]
+      const first = candidate ? byName.get(nameKey(candidate.white)) : undefined
+      const second = candidate?.black ? byName.get(nameKey(candidate.black)) : undefined
+      if (other === index || !first || !second) {
+        continue
+      }
+      for (const [mine, theirs] of [
+        [first, second],
+        [second, first],
+      ] as const) {
+        if (hasPlayed(left, mine) || hasPlayed(right, theirs)) {
+          continue
+        }
+        const cost = Math.abs(left.points - mine.points) + Math.abs(right.points - theirs.points)
+        const swap = {
+          other,
+          first: swapPair(left, mine, right, theirs),
+          second: swapPair(right, theirs, left, mine),
+        }
+        if (!best || cost < best.cost) {
+          best = { cost, swaps: [swap] }
+        } else if (cost === best.cost) {
+          best.swaps.push(swap)
+        }
+      }
+    }
+
+    const chosen = best?.swaps[Math.floor(random() * best.swaps.length)]
+    if (chosen) {
+      next[index] = chosen.first
+      next[chosen.other] = chosen.second
+    }
+  }
+
+  return next
+}
+
+function swapPair(player: ISwissPlayer, opponent: ISwissPlayer, old: ISwissPlayer, oldOpponent: ISwissPlayer): ISwissPair {
+  const [higher, lower] = opponent.points > player.points ? [opponent, player] : [player, opponent]
+  const kind: SwissPairKind = higher.points === lower.points ? 'same' : 'down'
+  return explain(
+    higher,
+    lower,
+    kind,
+    `${player.name} already played ${old.name}, so they swap partners with ${opponent.name} and ${oldOpponent.name}, the closest scores with fresh games.`,
+  )
+}
+
+export function rematchCount(pairs: ISwissPair[]): number {
+  return pairs.filter((pair) => pair.rematch).length
+}
+
 export function swissPairs(players: ISwissPlayer[], random: () => number = Math.random): ISwissPair[] {
   const bands = bandsByPoints(players)
   const pairs: ISwissPair[] = []

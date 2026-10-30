@@ -6,10 +6,13 @@ import { getMyAccount, listAccounts, saveMyAccount } from './accounts'
 import { readBoard } from './board'
 import { addDrawGame, listDraws, saveDraw } from './draws'
 import { generateNextRound, previewNextRound } from './next-round'
+import type { DrawMode, IKeptPair } from './next-round'
 import { listMyGames } from './my-games'
 import { getPlayer } from './players'
 import { readAutumnBoard } from './autumn'
 import { sortMembers, toMember } from './members'
+import { roleOf } from './roles'
+import type { IActor, Role } from './roles'
 
 const app = new Hono()
 
@@ -30,7 +33,7 @@ app.use(
   '*',
   cors({
     origin: allowedOrigins,
-    allowHeaders: ['Authorization', 'Content-Type'],
+    allowHeaders: ['Authorization', 'Content-Type', 'X-View-As'],
     allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   }),
 )
@@ -99,7 +102,8 @@ app.get('/accounts/me', async (c) => {
     return c.json({ error: 'Unauthorized' }, 401)
   }
 
-  return c.json({ account: await getMyAccount(userId) })
+  const [account, roles] = await Promise.all([getMyAccount(userId), readRoles(c, userId)])
+  return c.json({ account, role: roles.effective, canViewAsMember: roles.actual === 'organizer' })
 })
 
 app.put('/accounts/me', async (c) => {
@@ -199,6 +203,10 @@ app.post('/draws', async (c) => {
     return c.json({ error: 'Unauthorized' }, 401)
   }
 
+  if ((await readActor(c, userId)).role !== 'organizer') {
+    return c.json({ error: 'Only the organizer can do that.' }, 403)
+  }
+
   let body: unknown
   try {
     body = await c.req.json()
@@ -224,17 +232,24 @@ app.post('/draws/next', async (c) => {
     return c.json({ error: 'Unauthorized' }, 401)
   }
 
-  const round = await readRound(c)
-  if (round === null) {
+  if ((await readActor(c, userId)).role !== 'organizer') {
+    return c.json({ error: 'Only the organizer can do that.' }, 403)
+  }
+
+  const request = await readNextRound(c)
+  if (!request) {
     return c.json({ error: 'Send the round number.' }, 400)
   }
 
-  const result = await generateNextRound(round)
+  const result = await generateNextRound(request.round, request.kept, request.mode)
   if (!result.ok) {
     return c.json({ error: result.error }, result.status)
   }
+  if ('confirm' in result) {
+    return c.json({ round: request.round, rematch: true, pairs: result.confirm })
+  }
 
-  return c.json(result.draw, 201)
+  return c.json({ round: request.round, draw: result.draw, pairs: result.pairs }, 201)
 })
 
 app.post('/draws/preview', async (c) => {
@@ -282,7 +297,7 @@ app.post('/draws/:id/games', async (c) => {
     return c.json({ error: 'Send the match and a Chess.com game link.' }, 400)
   }
 
-  const result = await addDrawGame(drawId, body)
+  const result = await addDrawGame(drawId, body, await readActor(c, userId))
   if (!result.ok) {
     return c.json({ error: result.error }, result.status)
   }
@@ -314,6 +329,48 @@ async function readRound(c: Context): Promise<number | null> {
     return null
   }
   return body.round
+}
+
+async function readNextRound(c: Context): Promise<{ round: number; kept: IKeptPair[] | null; mode: DrawMode } | null> {
+  let body: unknown
+  try {
+    body = await c.req.json()
+  } catch {
+    return null
+  }
+  if (!isRecord(body) || typeof body.round !== 'number') {
+    return null
+  }
+  if (body.mode !== undefined && body.mode !== 'score' && body.mode !== 'random') {
+    return null
+  }
+  const mode: DrawMode = body.mode === 'random' ? 'random' : 'score'
+  if (body.pairs === undefined) {
+    return { round: body.round, kept: null, mode }
+  }
+  if (!Array.isArray(body.pairs)) {
+    return null
+  }
+  const kept: IKeptPair[] = []
+  for (const pair of body.pairs) {
+    if (!isRecord(pair) || typeof pair.white !== 'string' || (pair.black !== null && typeof pair.black !== 'string')) {
+      return null
+    }
+    kept.push({ white: pair.white, black: pair.black })
+  }
+  return { round: body.round, kept, mode }
+}
+
+async function readActor(c: Context, userId: string): Promise<IActor> {
+  return { clerkUserId: userId, role: (await readRoles(c, userId)).effective }
+}
+
+// An organizer can send X-View-As: member to test the site as a member. The header only ever lowers a role.
+async function readRoles(c: Context, userId: string): Promise<{ actual: Role; effective: Role }> {
+  const user = await c.get('clerk').users.getUser(userId)
+  const actual = roleOf(user)
+  const effective = actual === 'organizer' && c.req.header('X-View-As') === 'member' ? 'member' : actual
+  return { actual, effective }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

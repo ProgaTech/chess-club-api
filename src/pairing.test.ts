@@ -3,8 +3,9 @@ import { materialSwingFromSans, settledMaterialDeficit } from './material-swing'
 import type { ISwingStep } from './material-swing'
 import { gameStandingsFrom } from './game-table'
 import type { IClubGameRow } from './game-table'
+import { revealPairs } from './reveal'
 import { swissPairs } from './swiss'
-import type { ISwissPlayer } from './swiss'
+import type { ISwissPair, ISwissPlayer } from './swiss'
 
 describe('recovery', () => {
   test('ignores a queen trade that is recaptured on the next move', () => {
@@ -149,3 +150,43 @@ function player(name: string, points: number): ISwissPlayer {
 function label(pair: { white: string; black: string | null }): string {
   return pair.black ? `${pair.white}–${pair.black}` : pair.white
 }
+
+describe('reveal pairs', () => {
+  const planned: ISwissPair[] = [
+    {
+      white: 'Ada',
+      black: 'Ben',
+      kind: 'down',
+      rematch: true,
+      reason: '',
+      whitePlayer: { name: 'Ada', points: 2, gameWins: 4 },
+      blackPlayer: { name: 'Ben', points: 1.5, gameWins: 3 },
+    },
+    {
+      white: 'Cleo',
+      black: null,
+      kind: 'bye',
+      rematch: false,
+      reason: '',
+      whitePlayer: { name: 'Cleo', points: 0, gameWins: 0 },
+      blackPlayer: null,
+    },
+  ]
+
+  test('gives kept pairs the points the round was drawn from', () => {
+    const kept = [
+      { white: 'Ben', black: 'ada', games: [] },
+      { white: 'Cleo', black: null, games: [] },
+    ]
+    expect(revealPairs(kept, planned)).toEqual([
+      { white: { name: 'Ben', points: 1.5, gameWins: 3 }, black: { name: 'Ada', points: 2, gameWins: 4 } },
+      { white: { name: 'Cleo', points: 0, gameWins: 0 }, black: null },
+    ])
+  })
+
+  test('falls back to zero for a name the draw did not see', () => {
+    expect(revealPairs([{ white: 'Dan', black: null, games: [] }], planned)).toEqual([
+      { white: { name: 'Dan', points: 0, gameWins: 0 }, black: null },
+    ])
+  })
+})
