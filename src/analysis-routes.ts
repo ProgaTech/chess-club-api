@@ -3,12 +3,13 @@ import { bodyLimit } from 'hono/body-limit'
 import type { Context } from 'hono'
 import { and, eq } from 'drizzle-orm'
 import { db } from './db/client'
-import { analyses, chessGames } from './db/schema'
+import { analyses, chessGamePlayers, chessGames } from './db/schema'
 import { sharedGameUrl } from './my-games'
 import { lookupChessGame } from './chess-game-lookup'
 import { chessGameRef } from './chess-game'
 import { enqueue, runQueue } from './analysis-jobs'
 import { MAX_BYTES, parseFinishedPgn, savedPgn } from './analysis-game'
+import type { GameInput } from './analysis-game'
 
 async function matchGame(key: string) {
   const url = await sharedGameUrl(key)
@@ -17,13 +18,15 @@ async function matchGame(key: string) {
   const [stored] = await db.select().from(chessGames).where(and(eq(chessGames.provider,'chess.com'), eq(chessGames.externalId,ref.id), eq(chessGames.pace,ref.pace)))
   if (stored) {
     if (stored.status !== 'finished' || !/^(standard|normal|chess)$/i.test(stored.variant ?? 'standard')) return null
-    if (stored.pgn) return stored.pgn
+    const players = await db.select({color:chessGamePlayers.color,username:chessGamePlayers.username}).from(chessGamePlayers).where(eq(chessGamePlayers.gameId,stored.id))
+    const names = { white: players.find(p => p.color === 'white')?.username, black: players.find(p => p.color === 'black')?.username }
+    if (stored.pgn) return { pgn: stored.pgn, ...names }
     const result = { white_win: '1-0', black_win: '0-1', draw: '1/2-1/2' }[stored.result]
-    if (stored.encodedMoveList && result) return savedPgn(stored.encodedMoveList, result, stored.startingFen)
+    if (stored.encodedMoveList && result) return { pgn: savedPgn(stored.encodedMoveList, result, stored.startingFen), ...names }
   }
   const details = await lookupChessGame(url)
   if (!details?.finishedStandard || !details.moveList || !details.result) return null
-  return savedPgn(details.moveList, details.result, details.startFen)
+  return { pgn: savedPgn(details.moveList, details.result, details.startFen), white: details.white, black: details.black }
 }
 
 export function analysisRoutes(userId: (c: Context) => string | null | undefined) {
@@ -40,18 +43,20 @@ export function analysisRoutes(userId: (c: Context) => string | null | undefined
     if (!body || typeof body !== 'object' || Array.isArray(body) || ('pgn' in body) === ('gameId' in body))
       return c.json({error:'Choose a saved game or paste one PGN.'},422)
     let pgn: string
+    let players: Pick<GameInput, 'white' | 'black'> = {}
     if ('gameId' in body) {
       if (typeof body.gameId !== 'string' || !/^(live|daily)-\d+$/.test(body.gameId)) return c.json({error:'Unknown game.'},404)
       const saved = await matchGame(body.gameId)
       if (!saved) return c.json({error:'Finished game unavailable. Try pasting its PGN.'},404)
-      pgn = saved
+      pgn = saved.pgn
+      players = { white: saved.white, black: saved.black }
     } else {
       if (typeof body.pgn !== 'string' || body.finishedConfirmed !== true) return c.json({error:'Paste a PGN and confirm the game has finished.'},422)
       pgn = body.pgn
     }
     if (Buffer.byteLength(pgn) > MAX_BYTES) return c.json({error:'PGN exceeds 96 KiB.'},413)
     let game
-    try { game = parseFinishedPgn(pgn) }
+    try { game = { ...parseFinishedPgn(pgn), ...players } }
     catch { return c.json({error:'Use one legal, finished standard PGN with a matching result and 1–500 plies.'},422) }
     const job = await enqueue(c.var.owner,game)
     if (!job) { c.header('Retry-After','10'); return c.json({error:'Two games are already processing. Try again in 10 seconds.'},429) }

@@ -3,7 +3,7 @@ import { decode } from '@savi2w/chess-tcn'
 
 export const MAX_PLIES = 500
 export const MAX_BYTES = 96 * 1024
-export interface GameInput { start: string; moves: string[]; result: string }
+export interface GameInput { start: string; moves: string[]; result: string; white?: string; black?: string }
 
 export function parseFinishedPgn(pgn: string): GameInput {
   if (Buffer.byteLength(pgn) > MAX_BYTES) throw new Error('PGN exceeds 96 KiB.')
