@@ -20,3 +20,15 @@ Every signed-in user is a `member`: they can view all pages and add Chess.com ga
 An `organizer` can do everything: generate rounds, save draws, and add games to any match. Yura is the organizer. Set their verified Clerk email in `ORGANIZER_EMAIL`.
 
 Roles are checked on the server. Display names are never trusted, because any user can rename themselves to Yura.
+
+## Test game analysis
+
+Install the locked dependencies with `bun install --frozen-lockfile`. Run with Bun and Node.js 22+ on PATH. The Stockfish 18 Lite engine and its network are included in the stockfish package.
+
+Generate a report directly from a finished PGN:
+
+```sh
+bun src/analyze-pgn.ts docs/sample-game.pgn report.md
+```
+
+For the web flow, start this API with the usual Clerk and Postgres configuration, then open **Analysis** in the UI. The API applies the analysis migration at startup and processes one job at a time per server. A member can also choose **Analyze game** on an eligible entry in **Me → Games**. Completed and failed jobs expire after seven days.

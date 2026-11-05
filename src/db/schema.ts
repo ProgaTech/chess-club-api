@@ -146,3 +146,20 @@ export const chessGamePlayers = pgTable(
     check('chess_game_players_color', sql`${table.color} in ('white', 'black')`),
   ],
 )
+
+export const analyses = pgTable('analyses', {
+  id: text('id').primaryKey(),
+  owner: text('owner').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  input: jsonb('input').$type<import('../analysis-game').GameInput>().notNull(),
+  status: text('status').notNull().default('queued'),
+  done: integer('done').notNull().default(0),
+  total: integer('total').notNull(),
+  attempts: integer('attempts').notNull().default(0),
+  lease: timestamp('lease', { withTimezone: true }),
+  markdown: text('markdown'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+}, table => [
+  uniqueIndex('analyses_owner_fingerprint').on(table.owner, table.fingerprint),
+  index('analyses_status_created').on(table.status, table.createdAt),
+])

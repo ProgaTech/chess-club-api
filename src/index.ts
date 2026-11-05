@@ -14,6 +14,9 @@ import { sortMembers, toMember } from './members'
 import { roleOf } from './roles'
 import type { IActor, Role } from './roles'
 
+import { analysisRoutes } from './analysis-routes'
+import { startQueue } from './analysis-jobs'
+
 const app = new Hono()
 
 const clerkConfigured = Boolean(
@@ -46,6 +49,9 @@ if (clerkConfigured) {
     }),
   )
 }
+
+app.route('/analyses', analysisRoutes(c => clerkConfigured ? getAuth(c).userId : null))
+startQueue()
 
 app.get('/', (c) => {
   return c.json({ ok: true })
@@ -381,7 +387,7 @@ const port = Number(process.env.PORT ?? 3000)
 
 export default {
   port,
-  hostname: '0.0.0.0',
+  hostname: process.env.HOST ?? '0.0.0.0',
   fetch: app.fetch,
   idleTimeout: 60,
 }

@@ -8,6 +8,8 @@ const ERROR_CACHE_MS = 30 * 1000
 
 export interface IChessGameDetails {
   url: string
+  finishedStandard: boolean
+  startFen: string | null
   white: string
   black: string
   whiteRating: number | null
@@ -95,6 +97,8 @@ function parseGame(body: unknown, url: string): IChessGameDetails | null {
   const result = readResult(headers.Result)
   return {
     url,
+    finishedStandard: game.isFinished === true && ['standard', 'chess', 'normal'].includes(String(game.type ?? 'standard').toLowerCase()),
+    startFen: readString(headers.FEN),
     white,
     black,
     whiteRating: readNumber(headers.WhiteElo),
