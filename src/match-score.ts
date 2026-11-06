@@ -34,6 +34,8 @@ export interface IBoardGame {
   url: string
   outcome: GameOutcome
   winnerName: string | null
+  // Actual game color, which can differ from the tournament pairing's side.
+  winnerColor: 'white' | 'black' | null
   summary: string | null
   playedAt: string | null
   moveList: string | null
@@ -127,6 +129,7 @@ export function scorePair(input: IScorePairInput, aliases: Map<string, string>):
 
   for (const game of orderedGames(input.games)) {
     const outcome = gameOutcome(game, input.white, black, aliases)
+    const winnerColor = gameWinnerColor(game)
     if (!settled) {
       if (outcome === 'white') {
         whiteGameWins += 1
@@ -150,6 +153,7 @@ export function scorePair(input: IScorePairInput, aliases: Map<string, string>):
       url: game.url,
       outcome,
       winnerName: outcome === 'white' ? input.white : outcome === 'black' ? black : null,
+      winnerColor: winnerColor === 'draw' ? null : winnerColor,
       summary: game.summary,
       playedAt: game.playedAt,
       moveList: game.moveList,

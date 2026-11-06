@@ -1,3 +1,6 @@
+import { and, eq, inArray } from 'drizzle-orm'
+import { db } from './db/client'
+import { chessGames } from './db/schema'
 import type { IAccount } from './accounts'
 import { readClubNames } from './club-names'
 import type { IClubNames } from './club-names'
@@ -5,7 +8,25 @@ import { lookupChessGame } from './chess-game-lookup'
 import type { IChessGameDetails } from './chess-game-lookup'
 import { listDraws } from './draws'
 
+import { chessGameRef } from './chess-game'
+
+export function analysisGameKey(url: string) {
+  const ref = chessGameRef(url)
+  return ref ? ref.pace + '-' + ref.id : null
+}
+
+export async function sharedGameUrl(key: string) {
+  for (const draw of await listDraws()) {
+    for (const pair of draw.result.pairs) {
+      const url = pair.games.find(url => analysisGameKey(url) === key)
+      if (url) return url
+    }
+  }
+  return null
+}
+
 export interface IMyGame {
+  analysisGameId: string | null
   url: string
   opponent: string
   color: 'white' | 'black'
@@ -39,7 +60,22 @@ export interface IGameSubject {
 }
 
 export async function listMyGames(account: IAccount): Promise<IMyGame[]> {
-  return listPlayerGames({ names: playerNames(account), chessCom: account.chessCom })
+  const games = await listPlayerGames({ names: playerNames(account), chessCom: account.chessCom })
+  const ids = games.flatMap(game => chessGameRef(game.url)?.id ?? [])
+  if (!ids.length) return games
+  const saved = await db.select({
+    id: chessGames.externalId, pace: chessGames.pace, status: chessGames.status,
+    variant: chessGames.variant, result: chessGames.result, pgn: chessGames.pgn, moves: chessGames.encodedMoveList,
+  }).from(chessGames).where(and(eq(chessGames.provider, 'chess.com'), inArray(chessGames.externalId, ids)))
+  const byKey = new Map(saved.map(row => [row.pace + '-' + row.id, row]))
+  return games.map(game => {
+    const key = analysisGameKey(game.url)
+    const row = key && byKey.get(key)
+    if (!row) return game
+    const eligible = row.status === 'finished' && /^(standard|normal|chess)$/i.test(row.variant ?? 'standard')
+      && (row.pgn || (row.moves && row.result !== 'unknown'))
+    return {...game, analysisGameId: eligible ? key : null}
+  })
 }
 
 export async function listPlayerGames(subject: IGameSubject): Promise<IMyGame[]> {
@@ -83,6 +119,7 @@ async function describeGame(subject: IGameSubject, listed: IListedGame): Promise
   const details = await lookupChessGame(listed.url)
   if (!details) {
     return {
+      analysisGameId: null,
       url: listed.url,
       opponent: listed.opponent,
       color: listed.color,
@@ -106,6 +143,7 @@ async function describeGame(subject: IGameSubject, listed: IListedGame): Promise
   const yours = usernameMatches(subject.chessCom, details, color) || !subject.chessCom
   const outcome = yours ? outcomeFor(color, details.winner) : 'unknown'
   return {
+    analysisGameId: details.finishedStandard && details.result && details.moveList ? analysisGameKey(details.url) : null,
     url: details.url,
     opponent: listed.opponent,
     color,

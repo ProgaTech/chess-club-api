@@ -18,6 +18,7 @@ interface IPlayedGame {
   white: string
   black: string
   winner: string | null
+  winnerColor: 'white' | 'black' | null
   decisive: boolean
   playedAt: string | null
   plies: number | null
@@ -70,6 +71,7 @@ function playedGames(draws: IBoardDraw[]): IPlayedGame[] {
           white: pair.white,
           black: pair.black,
           winner: game.winnerName,
+          winnerColor: game.winnerColor,
           decisive: game.outcome === 'white' || game.outcome === 'black',
           playedAt: game.playedAt,
           plies: pliesOf(game.moveList),
@@ -245,11 +247,10 @@ function swingOf(game: IPlayedGame): IMaterialSwing | null {
   if (!game.decisive || !game.winner) {
     return null
   }
-  const winner = same(game.winner, game.white) ? 'white' : same(game.winner, game.black) ? 'black' : null
-  if (!winner) {
+  if (!game.winnerColor) {
     return null
   }
-  return materialSwing(game.moveList, winner)
+  return materialSwing(game.moveList, game.winnerColor)
 }
 
 function opponentOf(game: IPlayedGame): string {
