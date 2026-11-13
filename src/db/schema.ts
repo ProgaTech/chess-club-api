@@ -35,6 +35,13 @@ export const draws = pgTable('draws', {
   result: jsonb('result').notNull(),
 })
 
+export const playoffs = pgTable('playoffs', {
+  id: text('id').primaryKey(),
+  bracket: jsonb('bracket').$type<import('../playoff-bracket').PlayoffBracket>().notNull(),
+  revision: integer('revision').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+})
+
 export const signups = pgTable(
   'signups',
   {
