@@ -12,7 +12,7 @@ import { getPlayer } from './players'
 import { readAutumnBoard } from './autumn'
 import { sortMembers, toMember } from './members'
 import { roleOf } from './roles'
-import { drawPlayoffs, readPlayoffs, savePlayoffWinner } from './playoffs'
+import { addPlayoffGame, drawPlayoffs, readPlayoffs, savePlayoffWinner } from './playoffs'
 import type { IActor, Role } from './roles'
 
 import { analysisRoutes } from './analysis-routes'
@@ -211,6 +211,17 @@ app.post('/playoffs/result', async (c) => {
   let body: unknown
   try { body = await c.req.json() } catch { return c.json({ error: 'Send a match result.' }, 400) }
   const result = await savePlayoffWinner(body)
+  if (!result.ok) return c.json({ error: result.error }, result.status)
+  return c.json({ ok: true })
+})
+
+app.post('/playoffs/games', async (c) => {
+  if (!clerkConfigured) return c.json({ error: 'Clerk is not configured on the API' }, 503)
+  const { userId } = getAuth(c)
+  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
+  let body: unknown
+  try { body = await c.req.json() } catch { return c.json({ error: 'Send the match and a Chess.com game link.' }, 400) }
+  const result = await addPlayoffGame(body, await readActor(c, userId))
   if (!result.ok) return c.json({ error: result.error }, result.status)
   return c.json({ ok: true })
 })

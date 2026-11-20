@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { matchPlayers, qualification, recordWinner } from './playoff-bracket'
+import { addGame, matchPlayers, qualification, recordWinner } from './playoff-bracket'
 import type { PlayoffBracket } from './playoff-bracket'
 import type { IStanding } from './match-score'
 
@@ -49,5 +49,26 @@ describe('playoff advancement', () => {
     expect(recordWinner(finished, 'semi1', null).winners).toEqual({ semi2: 'C' })
     expect(recordWinner(finished, 'qualifier', 'C').winners).toEqual({ semi1: 'A', semi2: 'C', qualifier: 'C' })
     expect(recordWinner(finished, 'semi1', 'A')).toEqual(finished)
+  })
+})
+
+describe('playoff game links', () => {
+  const link = 'https://www.chess.com/game/live/1'
+  test('adds links only to matches with both players', () => {
+    expect(addGame(bracket, 'semi1', link).games).toEqual({ semi1: [link] })
+    expect(() => addGame(bracket, 'qualifier', link)).toThrow()
+  })
+  test('rejects a link already used anywhere in the playoff', () => {
+    expect(() => addGame(addGame(bracket, 'semi1', link), 'semi2', link)).toThrow()
+  })
+  test('a correction drops links only from matches whose players changed', () => {
+    const played: PlayoffBracket = {
+      ...bracket,
+      winners: { semi1: 'A', semi2: 'C', qualifier: 'A' },
+      games: { semi1: ['s1'], semi2: ['s2'], qualifier: ['q'], grand: ['g'] },
+    }
+    expect(recordWinner(played, 'semi1', 'B').games).toEqual({ semi1: ['s1'], semi2: ['s2'] })
+    expect(recordWinner(played, 'qualifier', 'C').games).toEqual({ semi1: ['s1'], semi2: ['s2'], qualifier: ['q'] })
+    expect(recordWinner(played, 'grand', 'A').games).toEqual(played.games)
   })
 })
