@@ -12,7 +12,7 @@ import { getPlayer } from './players'
 import { readAutumnBoard } from './autumn'
 import { sortMembers, toMember } from './members'
 import { roleOf } from './roles'
-import { addPlayoffGame, drawPlayoffs, readPlayoffs, savePlayoffWinner } from './playoffs'
+import { addPlayoffGame, readPlayoffs, savePlayoffWinner } from './playoffs'
 import type { IActor, Role } from './roles'
 
 import { analysisRoutes } from './analysis-routes'
@@ -191,16 +191,6 @@ app.get('/playoffs', async (c) => {
   if (!clerkConfigured) return c.json({ error: 'Clerk is not configured on the API' }, 503)
   if (!getAuth(c).userId) return c.json({ error: 'Unauthorized' }, 401)
   return c.json(await readPlayoffs())
-})
-
-app.post('/playoffs/draw', async (c) => {
-  if (!clerkConfigured) return c.json({ error: 'Clerk is not configured on the API' }, 503)
-  const { userId } = getAuth(c)
-  if (!userId) return c.json({ error: 'Unauthorized' }, 401)
-  if ((await readActor(c, userId)).role !== 'organizer') return c.json({ error: 'Only the organizer can do that.' }, 403)
-  const result = await drawPlayoffs()
-  if (!result.ok) return c.json({ error: result.error }, result.status)
-  return c.json({ ok: true }, 201)
 })
 
 app.post('/playoffs/result', async (c) => {
